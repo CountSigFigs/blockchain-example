@@ -1,10 +1,39 @@
 const SHA256 = require('crypto-js/sha256');
+const EC = require('elliptic').ec;
+const ec = new EC('secp256k1');
 
 class Transaction {
     constructor(fromAddress, toAddress, amount){
         this.fromAddress = fromAddress;
         this.toAddress = toAddress;
         this.amount = amount;
+    }
+
+    calculateHash(){
+        return SHA256(this.fromAddress + this.toAddress + this.amount).toString();
+    }
+
+    signTransaction(signingKey){
+
+        //checks to see if from address matches the user's public key
+        if (signingKey.getPublic('hex') !== this.fromAddress){
+            throw new Error('You cannot sign transactions for other wallets')
+        }
+
+        const hashTx = this.calculateHash();
+        const sig = signingKey.sign(hashTx, 'base64');
+        this.signature = sig.toDER('hex');
+    }
+
+    isValid(){
+        if (this.fromAddress === null) return true;
+
+        if (!this.signature || this.signature.length === 0){
+            throw new Error('No signature in this transaction')
+        }
+
+        const publicKey = ec.keyFromPublic(this.fromAddress, 'hex');
+        return publicKey.verify(this.calculateHash(), this.signature);
     }
 }
 
@@ -32,6 +61,16 @@ class Block {
             this.nonce++;
         }
         console.log("Block minded: " + this.hash)
+    }
+
+    hasValidTransactions(){
+        for (let tx of this.transactions){
+            if (!tx.isValid()){
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -64,7 +103,16 @@ class BlockChain {
         ];
     }
 
-    createTransaction(transcation){
+    addTransaction(transcation){
+
+        if (!transcation.fromAddress || !transcation.toAddress){
+            throw new Error('Transaction must have a from and to address')
+        }
+
+        if (!transcation.isValid()){
+            throw new Error('Cannot add invalid transaction to chain')
+        }
+
         this.pendingTransactions.push(transcation);
     }
 
@@ -86,24 +134,33 @@ class BlockChain {
         return balance;
     }
     //checks for integity of chain
-    isChainValid(){
-        for ( let i =1; i < this.chain.length; i++){
-            const currentBlock = this.chain[i];
-            const previousBlock = this.chain[i-1];
-
-            //if the hash doesn't match up with the actual data being hash then hash is not valid
-            if ( currentBlock.hash !== currentBlock.calculateHash()){
-                return false;
-            }
-
-            // if previous hash does not match the previous block's hash then something is wrong
-            if ( currentBlock.previousHash !== previousBlock.hash) {
-                return false
-            }
-
-            return true;
+    isChainValid() {
+        // Check if the Genesis block hasn't been tampered with by comparing
+        // the output of createGenesisBlock with the first block on our chain
+        const realGenesis = JSON.stringify(this.createGenesisBlock());
+    
+        if (realGenesis !== JSON.stringify(this.chain[0])) {
+          return false;
         }
-    }
+    
+        // Check the remaining blocks on the chain to see if there hashes and
+        // signatures are correct
+        for (let i = 1; i < this.chain.length; i++) {
+          const currentBlock = this.chain[i];
+    
+          if (!currentBlock.hasValidTransactions()) {
+            return false;
+          }
+    
+          if (currentBlock.hash !== currentBlock.calculateHash()) {
+              console.log(currentBlock.hash)
+              console.log(currentBlock.calculateHash())
+            return false;
+          }
+        }
+    
+        return true;
+      }
 }
 
 module.exports.BlockChain = BlockChain;
